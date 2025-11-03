@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1
+
+FROM debian:latest
+
+RUN <<-"EOF"
+  set -euxo pipefail
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    git \
+    make \
+    texlive-full
+  apt-get autoremove -y --purge
+  rm -rf /var/lib/apt/lists/*
+EOF
