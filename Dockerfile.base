@@ -9,6 +9,7 @@ RUN <<-"EOF"
     ca-certificates \
     git \
     latexmk \
+    lmodern \
     make \
     texlive \
     texlive-fonts-extra \
