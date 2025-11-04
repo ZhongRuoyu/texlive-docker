@@ -25,13 +25,16 @@ jobs:
     outputs:
       date: ${{ steps.date.outputs.date }}
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
       - name: Determine date
         id: date
         run: |
           if [[ "$GITHUB_EVENT_NAME" = "schedule" ]]; then
             date="$(TZ=UTC date "+%Y%m%d")"
           else
-            date="$(TZ=UTC date "+%Y%m%dT%H%M%SZ")"
+            timestamp="$(git show --no-patch --format=%at)"
+            date="$(TZ=UTC date --date="@$timestamp" "+%Y%m%dT%H%M%SZ")"
           fi
           echo "date=$date" >>"$GITHUB_OUTPUT"
 
