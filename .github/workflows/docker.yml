@@ -19,14 +19,33 @@ env:
   GHCR_REPOSITORY: ghcr.io/zhongruoyu/texlive
 
 jobs:
+  date:
+    name: Determine date
+    runs-on: ubuntu-latest
+    outputs:
+      date: ${{ steps.date.outputs.date }}
+    steps:
+      - name: Determine date
+        id: date
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" = "schedule" ]]; then
+            date="$(TZ=UTC date "+%Y%m%d")"
+          else
+            date="$(TZ=UTC date "+%Y%m%dT%H%M%SZ")"
+          fi
+          echo "date=$date" >>"$GITHUB_OUTPUT"
+
   build:
     strategy:
       fail-fast: false
       matrix:
+        tag:
+          - base
+          - full
         arch:
           - x86_64
           - aarch64
-    name: Build ${{ matrix.arch }}
+    name: Build ${{ matrix.tag }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -49,6 +68,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
+          file: Dockerfile.${{ matrix.tag }}
           platforms: linux/${{ matrix.arch }}
           outputs: |
             type=image,name=${{ env.DOCKERHUB_REPOSITORY }},name-canonical=true,push=true,push-by-digest=true
@@ -63,13 +83,19 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v5
         with:
-          name: digests-${{ matrix.arch }}
+          name: digests-${{ matrix.tag }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
 
   merge:
-    needs: build
+    needs: [build, date]
+    strategy:
+      fail-fast: false
+      matrix:
+        tag:
+          - base
+          - full
+    name: Merge ${{ matrix.tag }}
     runs-on: ubuntu-latest
-    name: Merge
     permissions:
       contents: read
       packages: write
@@ -91,19 +117,27 @@ jobs:
         uses: actions/download-artifact@v6
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-${{ matrix.tag }}-*
           merge-multiple: true
       - name: Create manifest list and push
         run: |
-          date="$(TZ=UTC date "+%Y%m%dT%H%M%SZ")"
           tags=(
-            "--tag=$DOCKERHUB_REPOSITORY:latest"
-            "--tag=$DOCKERHUB_REPOSITORY:$date"
-            "--tag=$GHCR_REPOSITORY:latest"
-            "--tag=$GHCR_REPOSITORY:$date"
+            "--tag=$DOCKERHUB_REPOSITORY:$TAG"
+            "--tag=$DOCKERHUB_REPOSITORY:$TAG-$DATE"
+            "--tag=$GHCR_REPOSITORY:$TAG"
+            "--tag=$GHCR_REPOSITORY:$TAG-$DATE"
           )
+          if [[ "$TAG" = "base" ]]; then
+            tags+=(
+              "--tag=$DOCKERHUB_REPOSITORY:latest"
+              "--tag=$GHCR_REPOSITORY:latest"
+            )
+          fi
           images=()
           for digest in "$RUNNER_TEMP"/digests/*; do
             images+=("$GHCR_REPOSITORY@sha256:$(cat "$digest")")
           done
           docker buildx imagetools create "${tags[@]}" "${images[@]}"
+        env:
+          DATE: ${{ needs.date.outputs.date }}
+          TAG: ${{ matrix.tag }}
