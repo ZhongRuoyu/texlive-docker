@@ -22,11 +22,15 @@ env:
   GHCR_REPOSITORY: ghcr.io/zhongruoyu/texlive
 
 jobs:
-  date:
-    name: Determine date
+  metadata:
+    name: Determine metadata
     runs-on: ubuntu-latest
     outputs:
       date: ${{ steps.date.outputs.date }}
+      base-labels: ${{ steps.metadata-base.outputs.labels }}
+      base-tags: ${{ steps.metadata-base.outputs.tags }}
+      full-labels: ${{ steps.metadata-full.outputs.labels }}
+      full-tags: ${{ steps.metadata-full.outputs.tags }}
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -42,8 +46,33 @@ jobs:
             date="$(TZ=UTC date --date="@$timestamp" "+%Y%m%dT%H%M%SZ")"
           fi
           echo "date=$date" >>"$GITHUB_OUTPUT"
+      - name: Determine metadata for base image
+        id: metadata-base
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        with:
+          images: |
+            ${{ env.DOCKERHUB_REPOSITORY }}
+            ${{ env.GHCR_REPOSITORY }}
+          flavor: |
+            latest=true
+          tags: |
+            base
+            base-${{ steps.date.outputs.date }}
+      - name: Determine metadata for full image
+        id: metadata-full
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        with:
+          images: |
+            ${{ env.DOCKERHUB_REPOSITORY }}
+            ${{ env.GHCR_REPOSITORY }}
+          flavor: |
+            latest=false
+          tags: |
+            full
+            full-${{ steps.date.outputs.date }}
 
   build:
+    needs: metadata
     strategy:
       fail-fast: false
       matrix:
@@ -84,18 +113,19 @@ jobs:
               echo "type=image,name=$GHCR_REPOSITORY,name-canonical=true,push=true,push-by-digest=true"
               echo "OUTPUTS"
             else
-              echo "cache_to="
               echo "outputs="
             fi
           } >> "$GITHUB_OUTPUT"
         env:
           PUSH: ${{ github.ref_name == 'main' }}
+          TAG: ${{ matrix.tag }}
       - name: Build and push Docker image by digest
         id: build
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           file: Dockerfile.${{ matrix.tag }}
           platforms: linux/${{ matrix.arch }}
+          labels: ${{ needs.metadata.outputs[format('{0}-labels', matrix.tag)] }}
           outputs: ${{ steps.setup.outputs.outputs }}
       - name: Export digest
         run: |
@@ -112,7 +142,7 @@ jobs:
 
   merge:
     if: github.ref_name == 'main'
-    needs: [build, date]
+    needs: [metadata, build]
     strategy:
       fail-fast: false
       matrix:
@@ -146,23 +176,15 @@ jobs:
           merge-multiple: true
       - name: Create manifest list and push
         run: |
-          tags=(
-            "--tag=$DOCKERHUB_REPOSITORY:$TAG"
-            "--tag=$DOCKERHUB_REPOSITORY:$TAG-$DATE"
-            "--tag=$GHCR_REPOSITORY:$TAG"
-            "--tag=$GHCR_REPOSITORY:$TAG-$DATE"
-          )
-          if [[ "$TAG" = "base" ]]; then
-            tags+=(
-              "--tag=$DOCKERHUB_REPOSITORY:latest"
-              "--tag=$GHCR_REPOSITORY:latest"
-            )
-          fi
-          images=()
-          for digest in "$RUNNER_TEMP"/digests/*; do
-            images+=("$GHCR_REPOSITORY@sha256:$(cat "$digest")")
+          mapfile -t tags <<< "$TAGS"
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(--tag="$tag")
           done
-          docker buildx imagetools create "${tags[@]}" "${images[@]}"
+          images=(
+            "$GHCR_REPOSITORY@sha256:$(cat "$RUNNER_TEMP"/digests/x86_64)"
+            "$GHCR_REPOSITORY@sha256:$(cat "$RUNNER_TEMP"/digests/aarch64)"
+          )
+          docker buildx imagetools create "${tag_args[@]}" "${images[@]}"
         env:
-          DATE: ${{ needs.date.outputs.date }}
-          TAG: ${{ matrix.tag }}
+          TAGS: ${{ needs.metadata.outputs[format('{0}-tags', matrix.tag)] }}
