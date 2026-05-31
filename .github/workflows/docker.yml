@@ -1,4 +1,4 @@
-name: Build and publish Docker images
+name: Docker
 
 on:
   workflow_dispatch:
@@ -15,6 +15,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: {}
+
 defaults:
   run:
     shell: bash -euxo pipefail {0}
@@ -29,6 +31,8 @@ jobs:
   metadata:
     name: Determine metadata
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       date: ${{ steps.date.outputs.date }}
       base-labels: ${{ steps.metadata-base.outputs.labels }}
@@ -88,9 +92,12 @@ jobs:
           - aarch64
     name: Build ${{ matrix.tag }} (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    environment:
+      name: docker
+      deployment: false
     permissions:
       contents: read
-      packages: write
+      packages: write # for pushing image
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
@@ -129,7 +136,7 @@ jobs:
         with:
           file: Dockerfile.${{ matrix.tag }}
           platforms: linux/${{ matrix.arch }}
-          labels: ${{ needs.metadata.outputs[format('{0}-labels', matrix.tag)] }}
+          labels: ${{ needs.metadata.outputs[format('{0}-labels', matrix.tag)] }} # zizmor: ignore[obfuscation]
           outputs: ${{ steps.setup.outputs.outputs }}
       - name: Export digest
         run: |
@@ -155,9 +162,12 @@ jobs:
           - full
     name: Merge ${{ matrix.tag }}
     runs-on: ubuntu-latest
+    environment:
+      name: docker
+      deployment: false
     permissions:
       contents: read
-      packages: write
+      packages: write # for pushing image
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
@@ -191,4 +201,4 @@ jobs:
           )
           docker buildx imagetools create "${tag_args[@]}" "${images[@]}"
         env:
-          TAGS: ${{ needs.metadata.outputs[format('{0}-tags', matrix.tag)] }}
+          TAGS: ${{ needs.metadata.outputs[format('{0}-tags', matrix.tag)] }} # zizmor: ignore[obfuscation]
